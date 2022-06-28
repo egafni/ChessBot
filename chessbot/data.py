@@ -1,34 +1,78 @@
+import bz2
+from typing import Optional
 from chess import pgn
+import numpy
+import torch
+from torch.utils.data import DataLoader
+from pytorch_lightning import LightningDataModule
 
-def read_game(game: pgn.Game):
-    headers = game.headers
-    time_control = headers['TimeControl']
+from more_itertools import chunked
+import itertools as it
 
-    if headers['Termination'] == 'Unterminated' or headers['Result'] == '*':
-        return False
+VOCAB = [a+b for a,b in it.product('abcdefgh','12345678')]
+VOCAB += [' ', 'A','B', '2', '1', '0']
+VOCAB = dict(zip(VOCAB, range(len(VOCAB))))
+
+def tokenize(x, vocab):
+    """
+    First token is A or B which we map to 
+    Last token is w/l/d
     
-    if '+' in time_control:
-        t0, t1 = time_control.split('+')
-        t = int(t0) + 40 * int(t1)
-    elif time_control == '-':
-        t = -1
+    >>> list(tokenize('B e2e4 c7c5 g1f3 1', VOCAB))
+    [66, 64, 33, 35, 64, 22, 20, 64, 48, 42, 64, 68]
+    """
+    tokens = x.split(' ')
+    yield vocab[tokens[0]]
+    yield vocab[' ']
 
-    try:
-        elo = (int(headers['WhiteElo']), int(headers['BlackElo']))
-    except:
-        elo = (0,0)
+    for token in tokens[1:-1]:
+        yield vocab[token[0:2]]
+        yield vocab[token[2:4]]
+        yield vocab[' ']
+    
+    yield vocab[tokens[-1]]
+    
+
+class ChessDataSet(torch.utils.data.Dataset):
+    def __init__(self, data) -> None:
+        super().__init__()
+        self.data = data
         
-    uci = [x.uci() for x in game.mainline_moves()]
-    res = 2-int(headers['Result'][-1]) #2 -> w, 1 -> b, 0 -> tie
+    def __len__(self):
+        return len(self.data)
+        
+    def __getitem__(self, idx):
+        return self.data[idx]
+                
+class ChessDataModule(LightningDataModule):
+    def __init__(self, data_path, batch_size: int = 32):
+        super().__init__()
+        self.batch_size = batch_size
+        self.data_path = data_path
 
-    if ((min(elo) < 1510) or (t < 300)) and (min(elo) < 2000):
-        return False
-    elif (len(uci) < 10) or (len(uci) > 200):
-        return False
+    def setup(self, stage: Optional[str] = None):
+        data = numpy.load(self.data_path)
+        n = len(data)
+        n_val = n_test = int(.1 * n)
+        n_train = n - n_val - n_test
+        
+        self.train_data, self.val_data, self.test_data = torch.utils.data.random_split(data, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(42))
+        
+        self.train_dataset = ChessDataSet(self.train_data)
+        self.val_dataset = ChessDataSet(self.val_data)
+        self.test_dataset = ChessDataSet(self.test_data)
+        
 
-    rank = 'A' if min(elo) >= 2000 and (t >= 300) else 'B'
-    
-    uci.append(str(res))
-    
-    return rank + ' ' + ' '.join(uci)
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size)
+
+
+    def teardown(self, stage: Optional[str] = None):
+        # Used to clean-up when the run is finished
+        pass           

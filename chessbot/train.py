@@ -1,0 +1,1 @@
+'/static/chess/data/lichess_db_standard_rated_2014-11.pgn.npy'
