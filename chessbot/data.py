@@ -10,6 +10,7 @@ from pytorch_lightning import LightningDataModule
 from more_itertools import chunked
 import itertools as it
 
+# see tokenize docstring for details
 VOCAB = [a+b for a,b in it.product('abcdefgh','12345678')]
 VOCAB += ['H', 'L', 'W', 'B', 'D', '.']  # . is for padding
 VOCAB += ['q','r','b', 'n']  # for pawn promoting
@@ -20,16 +21,16 @@ VOCAB_INV = dict(((y,x) for x,y in VOCAB.items()))
 
 def tokenize(x, vocab=None, pad_to=None):
     """
-    First token is A or B for "good rating" and "bad rating"
-    Last token is w/l/d (2->win 1->loss 0->draw)
+    First token is H or L for "high rating" and "low rating"
+    Last token is W, B, D for who won "white", "black" or "draw" 
     
     >>> tokenize('H e2e4 c7c5 g1f3 W', VOCAB)
-    [65, 65, 33, 35, 22, 20, 48, 42, 67]
+    [64, 33, 35, 22, 20, 48, 42, 66]
     >>> x = tokenize('H e2e4 c7c5 g1f3 W', VOCAB, pad_to=12)
     >>> len(x)
     12
     >>> x
-    [65, 65, 33, 35, 22, 20, 48, 42, 67, 70, 70, 70]
+    [64, 33, 35, 22, 20, 48, 42, 66, 69, 69, 69, 69]
     """
     if vocab is None:
         vocab = VOCAB
@@ -78,7 +79,7 @@ class ChessDataSet(torch.utils.data.Dataset):
         ints = tokenize(self.data[idx], vocab=self.vocab, pad_to=self.block_size+1)
         x = torch.tensor(ints[:-1], dtype=torch.long)
         y = torch.tensor(ints[1:], dtype=torch.long)
-        y[y==VOCAB['.']] = -100  # ignore padding in loss
+        y[y==VOCAB['.']] = -100 # ignore padding in loss
         
         return x,y 
                 
