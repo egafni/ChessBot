@@ -1,4 +1,5 @@
 import bz2
+from collections import Counter
 from typing import Optional
 from chess import pgn
 import numpy
@@ -10,67 +11,111 @@ from more_itertools import chunked
 import itertools as it
 
 VOCAB = [a+b for a,b in it.product('abcdefgh','12345678')]
-VOCAB += [' ', 'A','B', '2', '1', '0']
+VOCAB += ['H', 'L', 'W', 'B', 'D', '.']  # . is for padding
+VOCAB += ['q','r','b', 'n']  # for pawn promoting
+assert len(VOCAB) == len(set(VOCAB)), f'Duplicate vocab entries! {Counter(VOCAB)}'
 VOCAB = dict(zip(VOCAB, range(len(VOCAB))))
+VOCAB_INV = dict(((y,x) for x,y in VOCAB.items()))
 
-def tokenize(x, vocab):
+
+def tokenize(x, vocab=None, pad_to=None):
     """
-    First token is A or B which we map to 
-    Last token is w/l/d
+    First token is A or B for "good rating" and "bad rating"
+    Last token is w/l/d (2->win 1->loss 0->draw)
     
-    >>> list(tokenize('B e2e4 c7c5 g1f3 1', VOCAB))
-    [66, 64, 33, 35, 64, 22, 20, 64, 48, 42, 64, 68]
+    >>> tokenize('H e2e4 c7c5 g1f3 W', VOCAB)
+    [65, 65, 33, 35, 22, 20, 48, 42, 67]
+    >>> x = tokenize('H e2e4 c7c5 g1f3 W', VOCAB, pad_to=12)
+    >>> len(x)
+    12
+    >>> x
+    [65, 65, 33, 35, 22, 20, 48, 42, 67, 70, 70, 70]
     """
+    if vocab is None:
+        vocab = VOCAB
+        
     tokens = x.split(' ')
-    yield vocab[tokens[0]]
-    yield vocab[' ']
+    rv = []
 
-    for token in tokens[1:-1]:
-        yield vocab[token[0:2]]
-        yield vocab[token[2:4]]
-        yield vocab[' ']
+    for token in tokens:
+        if len(token) >= 4:
+            rv.append(vocab[token[0:2]])
+            rv.append(vocab[token[2:4]])
+            if len(token) == 5:
+                rv.append(vocab[token[4]])
+        else:
+            assert len(token) == 1, token
+            rv.append(vocab[token])
     
-    yield vocab[tokens[-1]]
+    if pad_to:
+        if len(rv) > pad_to:
+            raise ValueError(f'too many tokens: {x}\n{rv}')
+        elif len(rv) < pad_to:
+            padding = [vocab['.']] * (pad_to - len(rv))
+            rv = rv + padding
     
+    return rv
 
 class ChessDataSet(torch.utils.data.Dataset):
-    def __init__(self, data) -> None:
+    def __init__(self, data: numpy.ndarray, vocab: dict, block_size:int) -> None:
+        """
+
+        Args:
+            data (numpy.ndarray): 
+            vocab (dict): vocabulary
+            pad_to (int): amount to pad data samples by
+        """
         super().__init__()
         self.data = data
+        self.vocab = vocab
+        self.block_size = block_size
         
     def __len__(self):
         return len(self.data)
         
     def __getitem__(self, idx):
-        return self.data[idx]
+        # block_size + 1 because we inputs/outputs are shifted by 1
+        ints = tokenize(self.data[idx], vocab=self.vocab, pad_to=self.block_size+1)
+        x = torch.tensor(ints[:-1], dtype=torch.long)
+        y = torch.tensor(ints[1:], dtype=torch.long)
+        y[y==VOCAB['.']] = -100  # ignore padding in loss
+        
+        return x,y 
                 
 class ChessDataModule(LightningDataModule):
-    def __init__(self, data_path, batch_size: int = 32):
+    def __init__(self, data_path: numpy.ndarray, vocab: dict, block_size:int, batch_size: int, num_workers: int):
         super().__init__()
         self.batch_size = batch_size
         self.data_path = data_path
+        self.vocab = vocab
+        self.block_size = block_size
+        self.num_workers = num_workers
+        self.batch_size = batch_size
 
     def setup(self, stage: Optional[str] = None):
         data = numpy.load(self.data_path)
+        data = data[torch.randperm(len(data), generator=torch.Generator().manual_seed(42))]
         n = len(data)
         n_val = n_test = int(.1 * n)
         n_train = n - n_val - n_test
         
-        self.train_data, self.val_data, self.test_data = torch.utils.data.random_split(data, [n_train, n_val, n_test], generator=torch.Generator().manual_seed(42))
+        self.train_data = data[:n_train]
+        self.val_data = data[n_train:n_val]
+        self.test_data = data[n_train+n_val:]
         
-        self.train_dataset = ChessDataSet(self.train_data)
-        self.val_dataset = ChessDataSet(self.val_data)
-        self.test_dataset = ChessDataSet(self.test_data)
+        self.train_dataset = ChessDataSet(self.train_data, vocab=self.vocab, block_size=self.block_size)
+        self.val_dataset = ChessDataSet(self.val_data, vocab=self.vocab, block_size=self.block_size)
+        self.test_dataset = ChessDataSet(self.test_data, vocab=self.vocab, block_size=self.block_size)
         
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=self.batch_size)
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
 
 
     def teardown(self, stage: Optional[str] = None):

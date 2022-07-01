@@ -3,6 +3,10 @@ name = "chessbot"
 version = "0.1.0"
 description = ""
 authors = ["Erik Gafni <egafni@gmail.com>"]
+packages = [
+    { include = "chessbot" },
+    { include = "mingpt" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -17,6 +21,8 @@ torch = "^1.11.0"
 pytest = "^7.1.2"
 pytorch-lightning = "^1.6.4"
 more-itertools = "^8.13.0"
+ipywidgets = "^7.7.1"
+torchsummary = "^1.5.1"
 
 [tool.poetry.dev-dependencies]
 
