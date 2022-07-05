@@ -11,6 +11,7 @@ from more_itertools import chunked
 import itertools as it
 
 # see tokenize docstring for details
+# TODO keep each move as a single token rather than splitting into 2 or 3
 VOCAB = [a+b for a,b in it.product('abcdefgh','12345678')]
 VOCAB += ['H', 'L', 'W', 'B', 'D', '.']  # . is for padding
 VOCAB += ['q','r','b', 'n']  # for pawn promoting
@@ -79,7 +80,9 @@ class ChessDataSet(torch.utils.data.Dataset):
         ints = tokenize(self.data[idx], vocab=self.vocab, pad_to=self.block_size+1)
         x = torch.tensor(ints[:-1], dtype=torch.long)
         y = torch.tensor(ints[1:], dtype=torch.long)
-        y[y==VOCAB['.']] = -100 # ignore padding in loss
+        # ignore padding in loss, otherwise the model will just learn to predict padding
+        # one thing to try would be class balancing the padding, or just predicting 1-3 steps of padding
+        y[y==VOCAB['.']] = -100 
         
         return x,y 
                 
